@@ -1,0 +1,29 @@
+﻿@page "/Error"
+@using System.Diagnostics
+@inject ILogger<Error> Logger
+
+<PageTitle>Error</PageTitle>
+
+<h1 class="text-danger">Something went wrong</h1>
+<p>We couldn't complete your request. Please try again later.</p>
+
+@if (ShowRequestId)
+{
+    <p>
+        <strong>Request ID:</strong> <code>@RequestId</code>
+    </p>
+}
+
+@code{
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized()
+    {
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+        Logger.LogError("Unhandled request error. TraceId {TraceId}.", RequestId);
+    }
+}

@@ -1,0 +1,256 @@
+@page "/attendance"
+@implements IDisposable
+@inject IEventService EventService
+@inject IRegistrationService RegistrationService
+@inject IAttendanceService AttendanceService
+@inject ILogger<AttendanceTracker> Logger
+
+<PageTitle>Attendance tracker</PageTitle>
+
+<h1>Attendance tracker</h1>
+
+@if (Events.Count == 0)
+{
+    <p>No events are currently available.</p>
+}
+else
+{
+    <div class="row g-3 mb-4">
+        <div class="col-md-5">
+            <label class="form-label" for="attendance-event">Event</label>
+            <select id="attendance-event" class="form-select" value="@_selectedEventId" @onchange="OnEventChangedAsync">
+                @foreach (var eventItem in Events)
+                {
+                    <option value="@eventItem.Id">@eventItem.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label" for="attendee-search">Search by name</label>
+            <input id="attendee-search" class="form-control" type="search" @bind="_searchText" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label" for="status-filter">Filter by status</label>
+            <select id="status-filter" class="form-select" @bind="_statusFilter">
+                <option value="">All statuses</option>
+                @foreach (var status in Enum.GetValues<AttendanceStatus>())
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    @if (_summary is not null)
+    {
+        <section class="card mb-4" aria-labelledby="attendance-summary-heading">
+            <div class="card-body">
+                <h2 class="h5 card-title" id="attendance-summary-heading">Event summary</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-3">Total registered</dt>
+                    <dd class="col-sm-3">@_summary.TotalRegistered</dd>
+                    <dt class="col-sm-3">Checked in</dt>
+                    <dd class="col-sm-3">@_summary.CheckedIn</dd>
+                    <dt class="col-sm-3">No-shows</dt>
+                    <dd class="col-sm-3">@_summary.NoShows</dd>
+                    <dt class="col-sm-3">Attendance rate</dt>
+                    <dd class="col-sm-3">@_summary.AttendanceRate.ToString("F1")%</dd>
+                </dl>
+            </div>
+        </section>
+    }
+
+    @if (_errorMessage is not null)
+    {
+        <div class="alert alert-danger" role="alert">@_errorMessage</div>
+    }
+    @if (_isLoading)
+    {
+        <p role="status">Loading attendance…</p>
+    }
+    else if (FilteredRows.Count == 0)
+    {
+        <p>No registrations match the selected filters.</p>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <caption class="visually-hidden">Registrants and their attendance status</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Attendees</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Check-in time</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="FilteredRows" Context="row" ItemSize="58" SpacerElement="tr">
+                        <tr @key="row.Registration.Id">
+                            <td>@row.Registration.FullName</td>
+                            <td>@row.Registration.AttendeeCount</td>
+                            <td>@row.Attendance.Status</td>
+                            <td>@(row.Attendance.CheckInTime?.ToLocalTime().ToString("g") ?? "—")</td>
+                            <td class="text-nowrap">
+                                @if (row.Attendance.Status == AttendanceStatus.Registered)
+                                {
+                                    <button class="btn btn-sm btn-success me-1" disabled="@IsBusy(row.Registration.Id)"
+                                            @onclick="() => CheckInAsync(row.Registration.Id)">
+                                        Check in
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" disabled="@IsBusy(row.Registration.Id)"
+                                            @onclick="() => MarkNoShowAsync(row.Registration.Id)">
+                                        Mark no-show
+                                    </button>
+                                }
+                                else if (row.Attendance.Status == AttendanceStatus.CheckedIn)
+                                {
+                                    <button class="btn btn-sm btn-primary" disabled="@IsBusy(row.Registration.Id)"
+                                            @onclick="() => CheckOutAsync(row.Registration.Id)">
+                                        Check out
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    private IReadOnlyList<EventItem> Events = [];
+    private IReadOnlyList<AttendanceRow> _rows = [];
+    private AttendanceSummary? _summary;
+    private string? _selectedEventId;
+    private string _searchText = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string? _errorMessage;
+    private bool _isLoading;
+    private readonly HashSet<Guid> _busyRegistrationIds = [];
+
+    private List<AttendanceRow> FilteredRows => _rows
+        .Where(row => string.IsNullOrWhiteSpace(_searchText) ||
+                      row.Registration.FullName.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+        .Where(row => string.IsNullOrWhiteSpace(_statusFilter) ||
+                      row.Attendance.Status.ToString() == _statusFilter)
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AttendanceService.AttendanceChanged += OnAttendanceChanged;
+        try
+        {
+            Events = await EventService.GetEventsAsync();
+            _selectedEventId = Events.FirstOrDefault()?.Id;
+            await LoadAttendanceAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError("Unable to load attendance ({ExceptionType}).", exception.GetType().Name);
+            _errorMessage = "Attendance could not be loaded. Please refresh and try again.";
+        }
+    }
+
+    private async Task OnEventChangedAsync(ChangeEventArgs args)
+    {
+        _selectedEventId = args.Value?.ToString();
+        await LoadAttendanceAsync();
+    }
+
+    private async Task LoadAttendanceAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedEventId))
+        {
+            _rows = [];
+            _summary = null;
+            return;
+        }
+
+        _isLoading = true;
+        _errorMessage = null;
+        try
+        {
+            var eventId = _selectedEventId;
+            var registrationsTask = RegistrationService.GetRegistrationsByEventAsync(eventId);
+            var recordsTask = AttendanceService.GetAttendanceByEventAsync(eventId);
+            var summaryTask = AttendanceService.GetAttendanceSummaryAsync(eventId);
+            await Task.WhenAll(registrationsTask, recordsTask, summaryTask);
+
+            var records = await recordsTask;
+            var recordLookup = records.ToDictionary(record => record.RegistrationId);
+            _rows = (await registrationsTask)
+                .Where(registration => recordLookup.ContainsKey(registration.Id))
+                .Select(registration => new AttendanceRow(registration, recordLookup[registration.Id]))
+                .ToArray();
+            _summary = await summaryTask;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError("Unable to refresh attendance for event {EventId} ({ExceptionType}).",
+                _selectedEventId, exception.GetType().Name);
+            _errorMessage = "Attendance could not be refreshed. Please try again.";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task CheckInAsync(Guid registrationId) =>
+        await RunAttendanceActionAsync(registrationId, () => AttendanceService.CheckInAsync(registrationId));
+
+    private async Task CheckOutAsync(Guid registrationId) =>
+        await RunAttendanceActionAsync(registrationId, () => AttendanceService.CheckOutAsync(registrationId));
+
+    private async Task MarkNoShowAsync(Guid registrationId) =>
+        await RunAttendanceActionAsync(registrationId, () => AttendanceService.MarkNoShowAsync(registrationId));
+
+    private async Task RunAttendanceActionAsync(Guid registrationId, Func<Task<AttendanceRecord>> action)
+    {
+        if (!_busyRegistrationIds.Add(registrationId))
+        {
+            return;
+        }
+
+        _errorMessage = null;
+        try
+        {
+            await action();
+        }
+        catch (InvalidOperationException exception)
+        {
+            Logger.LogWarning("Invalid attendance transition for registration {RegistrationId} ({ExceptionType}).",
+                registrationId, exception.GetType().Name);
+            _errorMessage = "That attendance action is no longer available. Refresh the list and try again.";
+            await LoadAttendanceAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError("Attendance update failed for registration {RegistrationId} ({ExceptionType}).",
+                registrationId, exception.GetType().Name);
+            _errorMessage = "The attendance update failed. Please try again.";
+        }
+        finally
+        {
+            _busyRegistrationIds.Remove(registrationId);
+        }
+    }
+
+    private bool IsBusy(Guid registrationId) => _busyRegistrationIds.Contains(registrationId);
+
+    private void OnAttendanceChanged(string eventId)
+    {
+        if (eventId == _selectedEventId)
+        {
+            _ = InvokeAsync(LoadAttendanceAsync);
+        }
+    }
+
+    public void Dispose() => AttendanceService.AttendanceChanged -= OnAttendanceChanged;
+
+    private sealed record AttendanceRow(EventRegistration Registration, AttendanceRecord Attendance);
+}

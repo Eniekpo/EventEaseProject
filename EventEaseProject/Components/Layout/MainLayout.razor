@@ -1,0 +1,64 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject UserSessionService UserSession
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+            @if (!string.IsNullOrWhiteSpace(UserSession.Snapshot.Name))
+            {
+                <span aria-live="polite">Welcome back, @UserSession.Snapshot.Name</span>
+            }
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        UserSession.SessionChanged += OnSessionChanged;
+        Navigation.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await UserSession.InitializeAsync();
+            await TrackCurrentPageAsync();
+        }
+    }
+
+    private void OnSessionChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs args) =>
+        _ = InvokeAsync(TrackCurrentPageAsync);
+
+    private async Task TrackCurrentPageAsync()
+    {
+        await UserSession.InitializeAsync();
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', 2)[0];
+        await UserSession.RecordPageVisitAsync(string.IsNullOrEmpty(relativePath) ? "/" : $"/{relativePath}");
+    }
+
+    public void Dispose()
+    {
+        UserSession.SessionChanged -= OnSessionChanged;
+        Navigation.LocationChanged -= OnLocationChanged;
+    }
+}
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

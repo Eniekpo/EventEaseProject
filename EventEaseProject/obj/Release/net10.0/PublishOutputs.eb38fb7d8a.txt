@@ -1,0 +1,8 @@
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/EventEaseProject
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/appsettings.Development.json
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/appsettings.json
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/appsettings.Production.json
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/EventEaseProject.dll
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/EventEaseProject.runtimeconfig.json
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/EventEaseProject.pdb
+/Users/yoletech/EventEaseProject/EventEaseProject/bin/Release/net10.0/publish/EventEaseProject.deps.json

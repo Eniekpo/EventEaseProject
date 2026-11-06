@@ -1,0 +1,183 @@
+@page "/registration"
+@implements IDisposable
+@inject IEventService EventService
+@inject IRegistrationService RegistrationService
+@inject UserSessionService UserSession
+@inject ILogger<Registration> Logger
+
+<PageTitle>Event registration</PageTitle>
+
+<h1>Register for an event</h1>
+<p>Complete the form to reserve your place.</p>
+
+@if (!string.IsNullOrWhiteSpace(SuccessMessage))
+{
+    <div class="alert alert-success" role="status">@SuccessMessage</div>
+}
+@if (!string.IsNullOrWhiteSpace(ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
+}
+@if (LoadError is not null)
+{
+    <div class="alert alert-danger" role="alert">@LoadError</div>
+}
+
+<EditForm Model="Model" OnValidSubmit="HandleValidSubmitAsync">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div class="mb-3">
+        <label class="form-label" for="full-name">Full name</label>
+        <InputText id="full-name" class="form-control" autocomplete="name"
+                   aria-describedby="full-name-validation" @bind-Value="Model.FullName" />
+        <ValidationMessage id="full-name-validation" For="() => Model.FullName" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="email">Email address</label>
+        <InputText id="email" type="email" class="form-control" autocomplete="email"
+                   aria-describedby="email-validation" @bind-Value="Model.Email" />
+        <ValidationMessage id="email-validation" For="() => Model.Email" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="phone">Phone (optional)</label>
+        <InputText id="phone" type="tel" class="form-control" autocomplete="tel"
+                   aria-describedby="phone-validation" @bind-Value="Model.Phone" />
+        <ValidationMessage id="phone-validation" For="() => Model.Phone" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="event">Event</label>
+        <InputSelect id="event" class="form-select" aria-describedby="event-validation"
+                     @bind-Value="Model.EventId">
+            <option value="">Select an event</option>
+            @foreach (var eventItem in Events)
+            {
+                <option value="@eventItem.Id">@eventItem.Name — @eventItem.StartsAt.ToLocalTime().ToString("g")</option>
+            }
+        </InputSelect>
+        <ValidationMessage id="event-validation" For="() => Model.EventId" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="attendee-count">Number of attendees</label>
+        <InputNumber id="attendee-count" class="form-control" min="1" max="10"
+                     aria-describedby="attendee-count-validation" @bind-Value="Model.AttendeeCount" />
+        <ValidationMessage id="attendee-count-validation" For="() => Model.AttendeeCount" />
+    </div>
+
+    <button class="btn btn-primary" type="submit" disabled="@(_isSubmitting || Events.Count == 0)">
+        @(_isSubmitting ? "Submitting…" : "Register")
+    </button>
+</EditForm>
+
+@code {
+    private readonly RegistrationModel Model = new();
+    private IReadOnlyList<EventItem> Events = [];
+    private bool _isSubmitting;
+    private bool _sessionHydrated;
+    private string? SuccessMessage;
+    private string? ErrorMessage;
+    private string? LoadError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserSession.SessionChanged += OnSessionChanged;
+        try
+        {
+            Events = await EventService.GetEventsAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError("Unable to load events for registration ({ExceptionType}).", exception.GetType().Name);
+            LoadError = "Events could not be loaded. Please refresh the page and try again.";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        await UserSession.InitializeAsync();
+        ApplySessionDetails();
+        _sessionHydrated = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleValidSubmitAsync()
+    {
+        if (_isSubmitting)
+        {
+            return;
+        }
+
+        _isSubmitting = true;
+        SuccessMessage = null;
+        ErrorMessage = null;
+        try
+        {
+            var result = await RegistrationService.RegisterAsync(Model);
+            if (result.IsDuplicate)
+            {
+                ErrorMessage = "This email address is already registered for the selected event.";
+                return;
+            }
+
+            if (!result.Succeeded || result.Registration is null)
+            {
+                ErrorMessage = "We couldn't complete your registration. Please try again.";
+                return;
+            }
+
+            await UserSession.SetRegisteredUserAsync(result.Registration.FullName, result.Registration.Email);
+            SuccessMessage = "Your registration was successful.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(
+                "Registration failed for event {EventId} ({ExceptionType}).",
+                Model.EventId,
+                exception.GetType().Name);
+            ErrorMessage = "We couldn't complete your registration right now. Please try again.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private void OnSessionChanged()
+    {
+        if (!_sessionHydrated)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            ApplySessionDetails();
+            StateHasChanged();
+        });
+    }
+
+    private void ApplySessionDetails()
+    {
+        var snapshot = UserSession.Snapshot;
+        if (string.IsNullOrWhiteSpace(Model.FullName) && !string.IsNullOrWhiteSpace(snapshot.Name))
+        {
+            Model.FullName = snapshot.Name;
+        }
+
+        if (string.IsNullOrWhiteSpace(Model.Email) && !string.IsNullOrWhiteSpace(snapshot.Email))
+        {
+            Model.Email = snapshot.Email;
+        }
+    }
+
+    public void Dispose() => UserSession.SessionChanged -= OnSessionChanged;
+}
